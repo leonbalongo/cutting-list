@@ -90,6 +90,10 @@ Shelf,864,540,3,Plywood,false
 
 `label`, `width`, `length`, and `quantity` are required headers (case-insensitive). `material` defaults to `Plywood`; `rotate` defaults to true and accepts `false`, `no`, or `0` to lock orientation. CSV import replaces the parts list after confirmation. Material names match exactly and are case-sensitive. Rotation locks preserve the entered width/length axes, so enter stock and parts in consistent grain orientation.
 
+On Android, tap **Import CSV → Choose CSV**, then browse **Files / Downloads**. The picker deliberately shows all file types: Android providers do not label CSV MIME types consistently. Cutcraft validates the selected content rather than trusting its filename or MIME label. JSON backups use **My projects → Open project JSON**, including when the provider omits the `.json` extension. Cancelling or selecting an invalid file leaves the current project untouched, and imports can be retried.
+
+Excel `.xlsx`/`.xls` files are **not** CSV, even after renaming them. Export them as **CSV UTF-8** first. The app now identifies Excel/ZIP and UTF-16 files and shows a persistent explanation in the import dialog.
+
 The placement CSV gives the top-left position of each piece relative to its stock sheet's top-left origin, in millimeters. Part dimensions in that export and the diagram are the **placed dimensions**, after any rotation. Exports are planning documents, not machine/CNC toolpaths.
 
 ## Accuracy & performance

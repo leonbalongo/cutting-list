@@ -2,6 +2,7 @@ import "./style.css";
 import { normalize } from "./optimizer.js";
 import { partsFromCSV, csvCell } from "./csv.js";
 import { isNative, shareNativeFile, printNativePlan } from "./native.js";
+import { chooseImportFile, readImportText } from "./import-file.js";
 
 const icons = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -207,7 +208,7 @@ function render() {
     <div class="bottom-note"><div class="leaf-icon">${icon("leaf")}</div><div><strong>A little planning. A lot less waste.</strong><span>Good projects start with making the most of what you have.</span></div><span class="independent-tag">Independently built. Made for makers.</span></div>
   </main><footer><span><b>cutcraft.</b> Make every sheet count.</span><span>No subscriptions. No accounts. Just better cuts.</span><button data-action="guide">Help & shortcuts ${icon("chevron")}</button></footer>
   <datalist id="materials">${[...new Set(["Plywood", "MDF", "Melamine", ...project.parts.map((p) => p.material), ...project.stocks.map((s) => s.material)])].map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
-  <input type="file" id="file-input" accept=".csv,.json" hidden><dialog id="dialog"></dialog>`;
+  <dialog id="dialog"></dialog>`;
   renderMetrics();
   renderResults();
   updateOptimize();
@@ -499,9 +500,10 @@ app.addEventListener("change", async (event) => {
   if (event.target.id !== "file-input") return;
   const file = event.target.files[0];
   if (!file) return;
+  const kind = event.target.dataset.importKind;
   try {
-    const text = await file.text();
-    if (file.name.toLowerCase().endsWith(".json")) {
+    const text = await readImportText(file);
+    if (kind === "json") {
       const incoming = JSON.parse(text);
       if (!validProject(incoming))
         throw new Error("This is not a Cutcraft project JSON file.");
@@ -533,6 +535,18 @@ app.addEventListener("change", async (event) => {
     render();
     toast("Imported successfully");
   } catch (e) {
+    const dialog = document.querySelector("#dialog[open]");
+    if (dialog) {
+      let error = dialog.querySelector("#import-error");
+      if (!error) {
+        error = document.createElement("p");
+        error.id = "import-error";
+        error.className = "warning";
+        error.setAttribute("role", "alert");
+        dialog.querySelector(".modal-content").append(error);
+      }
+      error.textContent = `Import failed: ${e.message}`;
+    }
     toast(`Import failed: ${e.message}`);
   } finally {
     const el = document.querySelector("#file-input");
@@ -689,14 +703,12 @@ app.addEventListener("click", async (event) => {
     case "import":
       modal(
         "Import your cut list",
-        `<p class="modal-intro">Import a CSV with these column names. Dimensions are in millimeters; quantity is a whole number.</p><pre>label,width,length,quantity,material,rotate\nSide panel,720,560,2,Plywood,true\nShelf,864,540,3,Plywood,false</pre><p>Material and rotate are optional. Set rotate to false for grain-sensitive parts. Import replaces the current parts list.</p><div class="modal-actions"><button class="button secondary" data-action="csv-template">${icon("download")} Download template</button><button class="button primary" data-action="choose-csv">${icon("upload")} Choose CSV</button></div>`,
+        `<p class="modal-intro">Import a CSV with these column names. Dimensions are in millimeters; quantity is a whole number.</p><pre>label,width,length,quantity,material,rotate\nSide panel,720,560,2,Plywood,true\nShelf,864,540,3,Plywood,false</pre><p>Material and rotate are optional. Set rotate to false for grain-sensitive parts. Import replaces the current parts list.</p><p>The picker shows all files so CSVs are selectable on Android. Choose a plain-text CSV, not an Excel workbook renamed to .csv.</p><div class="modal-actions"><button class="button secondary" data-action="csv-template">${icon("download")} Download template</button><button class="button primary" data-action="choose-csv">${icon("upload")} Choose CSV</button></div>`,
       );
       break;
     case "choose-csv":
     case "import-json": {
-      const input = document.querySelector("#file-input");
-      input.accept = action === "choose-csv" ? ".csv" : ".json";
-      input.click();
+      chooseImportFile(action === "choose-csv" ? "csv" : "json");
       break;
     }
     case "csv-template":
