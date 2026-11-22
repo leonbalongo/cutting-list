@@ -1,0 +1,114 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/android-apk.yml"
+      - "android/**"
+      - "capacitor.config.json"
+      - "package*.json"
+      - "index.html"
+      - "public/**"
+      - "src/**"
+      - "scripts/**"
+      - "tests/**"
+      - "vite.config.js"
+  pull_request:
+    paths:
+      - ".github/workflows/android-apk.yml"
+      - "android/**"
+      - "capacitor.config.json"
+      - "package*.json"
+      - "index.html"
+      - "public/**"
+      - "src/**"
+      - "scripts/**"
+      - "tests/**"
+      - "vite.config.js"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Build installable debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+      - run: npm test
+      - name: Bundle local web assets and native plugins
+        run: npm run android:sync
+      - name: Compile and lint Android application
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+      - name: Prepare and verify APK
+        run: |
+          mkdir -p apk-download
+          cp android/app/build/outputs/apk/debug/app-debug.apk apk-download/Cutcraft-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs apk-download/Cutcraft-debug.apk > apk-download/signature.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging apk-download/Cutcraft-debug.apk > apk-download/package-info.txt
+          grep "package: name='io.github.leonbalongo.cutcraft'" apk-download/package-info.txt
+          (cd apk-download && sha256sum Cutcraft-debug.apk > SHA256SUMS.txt)
+          cat > apk-download/INSTALL.txt <<'EOF'
+          Cutcraft for Android — test build
+
+          1. Download and extract this ZIP on your Android device.
+          2. Open Cutcraft-debug.apk and allow installation from your browser/file manager when prompted.
+          3. Open Cutcraft. All assets and optimization are bundled; no internet connection is required.
+
+          Android 7.0+ with an up-to-date Android System WebView is required.
+          This is a debug-signed testing build, not a Play Store release. A future build from another
+          runner may have a different debug certificate. Back up projects with Export plan -> Project
+          backup before uninstalling an older build if Android refuses an update.
+          No subscription, account, or imposed calculation quota. Practical device limits apply.
+          Verify dimensions and layouts before cutting.
+          EOF
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: Cutcraft-Android-APK
+          path: apk-download/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Download instructions
+        env:
+          DOWNLOAD_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Cutcraft Android APK"
+            echo ""
+            echo "[Download APK bundle]($DOWNLOAD_URL) (sign in, then extract the ZIP and open Cutcraft-debug.apk)."
+            echo ""
+            echo "Android 7.0+ with a current Android System WebView. Debug-signed test build; not for Play Store distribution."
+            echo ""
+            echo "Commit: $GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-lint-report
+          path: android/app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
+          retention-days: 14

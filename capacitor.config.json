@@ -1,0 +1,9 @@
+{
+  "appId": "io.github.leonbalongo.cutcraft",
+  "appName": "Cutcraft",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#f7f8fa",
+    "allowMixedContent": false
+  }
+}

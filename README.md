@@ -2,7 +2,7 @@
 
 An independent, subscription-free sheet cutting planner built for this repository. **No accounts, billing, analytics, calculation quotas, or backend.** All project data and optimization stay in the browser.
 
-> This is a new web app, not a modification or rebuild of CutList Optimizer. No code, branding, or assets from the uploaded third-party archive are used. This is not an Android APK.
+> This is a new app, not a modification or rebuild of CutList Optimizer. No code, branding, or assets from the uploaded third-party archive are used. It runs on the web and as a bundled Android app using Capacitor.
 
 ## Features
 
@@ -38,9 +38,45 @@ Deploy the contents of `dist/` to any static HTTPS host **at its domain root**. 
 
 This app uses relative/same-origin assets only; there are no remote fonts, API calls, or third-party scripts. Project data is not included in the service-worker cache.
 
-### On Android
+## Download an Android APK
 
-Open the deployed HTTPS app in a supported browser and use **Install app** / **Add to home screen**. Browser installation support varies; this repository does not produce a signed native APK. The app includes SVG, 192px / 512px PNG, and Apple touch icons.
+The **[Android APK workflow](https://github.com/leonbalongo/cutting-list/actions/workflows/android-apk.yml)** builds an installable, debug-signed APK on source pushes and pull requests. Once this workflow is on the default branch, it can also be started with **Run workflow**, selecting the branch to build.
+
+1. Open a successful **Android APK** run for the branch/commit you want.
+2. Download **Cutcraft-Android-APK** under **Artifacts** (you must be signed in).
+3. Extract the ZIP and open **`Cutcraft-debug.apk`** on your Android phone.
+4. Allow **Install unknown apps** for your browser/file manager when Android asks. You can revoke this permission afterward.
+
+The artifact also contains a SHA-256 checksum, APK certificate/package information, and installation notes. Artifacts expire after 90 days; download a copy or rerun the workflow. Only install builds from a repository/commit you trust.
+
+### Android behavior
+
+- Requires **Android 7.0+** and an **up-to-date Android System WebView**. If you see a blank page on an old device, update WebView / Chrome.
+- The APK bundles the complete UI, optimizer worker, and icons. It needs **no hosted site or internet connection, even on first launch**. It has no account, subscription, or imposed calculation limit.
+- Uses its own package name: `io.github.leonbalongo.cutcraft`. It does not replace the third-party app.
+- File exports use **Android's share sheet** instead of unsupported WebView blob downloads. Choose a file manager, Drive, email, etc. to save/send a copy. Cutcraft itself does not upload your project; choosing a cloud destination is your decision.
+- Print / PDF uses the **Android print dialog**. Choose **Save as PDF** or a configured print service.
+- CSV/JSON import uses the system file chooser. Storage stays private to the app; no broad storage, billing, or account permissions are requested. Android automatic backup is disabled.
+- Project data in the APK is separate from the website's browser storage. Export/import JSON to transfer projects. **Uninstalling or clearing app data deletes saved projects.**
+- The native app skips the web service worker to avoid stale assets after APK updates. The web version retains offline PWA caching.
+
+**This is a debug/testing APK, not a Play Store release.** Android may display a sideloading/security warning. Each fresh build runner may use a different debug signing key, so an update can fail with a signature mismatch. Export your projects before uninstalling an older testing build. Production distribution requires a private, stable release key and usually an AAB; no release keys or passwords are committed.
+
+### Build Android locally
+
+Requires Node.js 22+, **JDK 21**, and an Android SDK with **platform 36** and **build-tools 36.0.0**. Android Studio can install the SDK. Set `ANDROID_HOME`/`JAVA_HOME` for your machine.
+
+```sh
+npm ci
+npm run android:apk
+# Output: android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+`npm run android:sync` rebuilds web assets and syncs native plugins; run it after web changes. `npm run android:open` opens the checked-in Android project in Android Studio. `npm run android:icons` regenerates legacy launcher PNGs from the original SVG; adaptive and splash vector icons live in Android resources. Do not commit APKs, local SDK paths, generated web copies, or signing keys.
+
+### Install the website instead
+
+Alternatively, open a deployed HTTPS web version and use **Install app** / **Add to home screen**. Browser installation support varies. The website includes SVG, 192px / 512px PNG, and Apple touch icons.
 
 ## CSV format
 
@@ -104,6 +140,9 @@ src/main.js           UI, persistence, import/export and worker orchestration
 src/optimizer.js      Independent packing engine and validation
 src/worker.js         Worker message boundary
 src/csv.js            CSV parsing and serialization
+src/native.js         Android file export and print bridge
+android/              Native Capacitor project, icons and print plugin
+capacitor.config.json Native app identity and bundled web configuration
 src/style.css         Responsive layout and print styles
 public/               Original icon and web manifest
 scripts/build-sw.js   Production offline-cache generator

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Cutcraft</string>
+    <string name="title_activity_main">Cutcraft</string>
+    <string name="package_name">io.github.leonbalongo.cutcraft</string>
+    <string name="custom_url_scheme">io.github.leonbalongo.cutcraft</string>
+</resources>
