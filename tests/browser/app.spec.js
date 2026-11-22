@@ -80,7 +80,16 @@ test("imports a CSV and reports parts that cannot fit", async ({ page }) => {
   await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
   page.on("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Import CSV" }).click();
-  await page.locator("#file-input").setInputFiles({
+  const pickerOpened = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+  const picker = await pickerOpened;
+  expect(
+    await picker
+      .element()
+      .evaluate((input) => Boolean(input.closest("dialog[open]"))),
+  ).toBe(true);
+  await expect(page.locator("#file-input")).toHaveAttribute("accept", "");
+  await picker.setFiles({
     name: "parts.csv",
     mimeType: "text/csv",
     buffer: Buffer.from(
@@ -135,4 +144,95 @@ test("production app optimizes with the network disconnected", async ({
   await page.locator("#optimize-button").click();
   await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
   await expect(page.getByText("Every piece has its place")).toBeVisible();
+});
+
+test("mobile picker accepts CSV with a generic provider MIME type and no extension", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Import CSV", exact: true }).click();
+  const opened = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+  const chooser = await opened;
+  expect(chooser.isMultiple()).toBe(false);
+  await chooser.setFiles({
+    name: "document",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from(
+      "label,width,length,quantity\nProvider shelf,100,200,2",
+    ),
+  });
+  await expect(page.getByLabel("Part 1 label")).toHaveValue("Provider shelf");
+  await expect(page.locator(".part-row")).toHaveCount(1);
+});
+
+test("cancel and failed imports retain the cut list and allow picking the same file again", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Import CSV", exact: true }).click();
+  let opened = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+  await (await opened).setFiles([]);
+  await expect(page.locator(".part-row")).toHaveCount(5);
+  const file = {
+    name: "cutting_list.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from([0x50, 0x4b, 3, 4]),
+  };
+  for (let i = 0; i < 2; i++) {
+    opened = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+    await (await opened).setFiles(file);
+    await expect(page.getByRole("alert")).toContainText(
+      "changing the filename to .csv does not convert it",
+    );
+    await expect(page.locator(".part-row")).toHaveCount(5);
+    await expect(page.getByLabel("Side panel width")).toHaveValue("720");
+  }
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByRole("button", { name: "Import CSV", exact: true }).click();
+  opened = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+  expect(
+    await (
+      await opened
+    )
+      .element()
+      .evaluate((input) => input.closest("dialog")?.open),
+  ).toBe(true);
+});
+
+test("project JSON picker opens inside My projects and uses the selected import mode", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  const project = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("cutcraft-draft-v1")),
+  );
+  project.name = "Restored Android project";
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "My projects", exact: true }).click();
+  const opened = page.waitForEvent("filechooser");
+  await page
+    .getByRole("button", { name: "Open project JSON", exact: true })
+    .click();
+  const chooser = await opened;
+  expect(
+    await chooser.element().evaluate((input) => input.closest("dialog")?.open),
+  ).toBe(true);
+  await chooser.setFiles({
+    name: "backup",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from(JSON.stringify(project)),
+  });
+  await expect(page.getByLabel("Project name", { exact: true })).toHaveValue(
+    "Restored Android project",
+  );
+  await expect(page.locator(".part-row")).toHaveCount(5);
 });
