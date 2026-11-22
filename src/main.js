@@ -1,6 +1,7 @@
 import "./style.css";
 import { normalize } from "./optimizer.js";
 import { partsFromCSV, csvCell } from "./csv.js";
+import { isNative, shareNativeFile, printNativePlan } from "./native.js";
 
 const icons = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -416,13 +417,21 @@ function modal(title, content, wide = false) {
   dialog.innerHTML = `<div class="modal-header"><h2>${esc(title)}</h2><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">${icon("close")}</button></div><div class="modal-content">${content}</div>`;
   dialog.showModal();
 }
-function download(name, content, type) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+async function download(name, content, type) {
+  try {
+    if (isNative()) {
+      await shareNativeFile(name, content);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    toast(`Export not completed: ${error.message || "Please try again."}`);
+  }
 }
 const filename = () =>
   project.name.replace(/[^a-z0-9-_ ]/gi, "").trim() || "cutcraft-project";
@@ -446,7 +455,7 @@ function showProjects() {
     `<p class="modal-intro">Saved in this browser, on this device. Export JSON to back up or move a project.</p><div class="project-list">${projects.length ? projects.map((p) => `<div class="saved-project"><span class="project-folder">${icon("folder")}</span><button class="project-open" data-action="load-project" data-id="${esc(p.id)}"><strong>${esc(p.name)}</strong><small>${p.parts.length} part types · ${new Date(p.updated).toLocaleDateString()}</small></button><button class="icon-button" data-action="delete-project" data-id="${esc(p.id)}" aria-label="Delete saved ${esc(p.name)}">${icon("trash")}</button></div>`).join("") : '<div class="modal-empty">No saved projects yet. Use “Save project” to keep this one.</div>'}</div><button class="button secondary" data-action="import-json">${icon("upload")} Open project JSON</button>`,
   );
 }
-function printPlan() {
+async function printPlan() {
   if (!result?.sheets.length) {
     toast("Optimize a layout before printing.");
     return;
@@ -461,7 +470,12 @@ function printPlan() {
     )
     .join("");
   document.body.append(section);
-  window.print();
+  try {
+    if (isNative()) await printNativePlan();
+    else window.print();
+  } catch (error) {
+    toast(`Printing not available: ${error.message || "Please try again."}`);
+  }
 }
 
 app.addEventListener("input", (event) => {
@@ -797,5 +811,7 @@ document.addEventListener("keydown", (event) => {
 render();
 persist();
 run();
-if ("serviceWorker" in navigator && import.meta.env.PROD)
+// The APK already bundles all assets. A service worker could retain an older
+// web build across an Android app update, so only register it on the web.
+if (!isNative() && "serviceWorker" in navigator && import.meta.env.PROD)
   navigator.serviceWorker.register("/sw.js").catch(() => {});

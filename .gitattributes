@@ -1,0 +1,6 @@
+# Store text consistently; check out the Windows Gradle launcher as CRLF.
+* text=auto
+*.bat text eol=crlf
+*.jar binary
+*.png binary
+*.zip binary

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="288" android:viewportHeight="288">
+    <!-- Safe-zone inset for circular, rounded and squircle launcher masks. -->
+    <group android:translateX="48" android:translateY="48">
+        <path android:fillColor="@android:color/transparent" android:strokeColor="#f6fbef"
+            android:strokeWidth="9" android:strokeLineJoin="round"
+            android:pathData="M42,44 L150,44 L150,148 L42,148 Z M42,108 L150,108 M105,44 L105,108 M82,108 L82,148" />
+        <path android:fillColor="@android:color/transparent" android:strokeColor="#d5ed99"
+            android:strokeWidth="9" android:strokeLineCap="round"
+            android:pathData="M130,30 L160,60" />
+    </group>
+</vector>
