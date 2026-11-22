@@ -2287,3 +2287,56 @@ pre {
 th {
   position: relative;
 }
+
+/* Grain-aware tables keep the additional axis controls readable and scroll
+   within their cards on a phone, rather than widening the whole page. */
+.with-grain {
+  min-width: 650px;
+}
+.grain-col {
+  width: 95px;
+}
+.grain-select {
+  width: 100%;
+  border: 1px solid #dfe7dc;
+  background: #f8faf6;
+  color: #526b51;
+  border-radius: 4px;
+  padding: 5px 3px;
+  font-size: 10px;
+}
+.grain-setting small {
+  max-width: 340px;
+}
+.worksheet-label {
+  display: block;
+  font-size: 11px;
+  margin-bottom: 6px;
+  color: #627568;
+}
+#import-sheet {
+  width: 100%;
+  padding: 9px;
+  border: 1px solid #cfdccb;
+  border-radius: 5px;
+  background: #f8faf5;
+  color: #33483f;
+}
+.import-counts {
+  margin-top: 18px;
+}
+.import-preview-table {
+  min-width: 430px;
+  table-layout: auto;
+}
+.import-preview-table th,
+.import-preview-table td {
+  padding: 8px 5px;
+  height: auto;
+  font-size: 9px;
+}
+.modal-actions button:disabled,
+.export-options button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}

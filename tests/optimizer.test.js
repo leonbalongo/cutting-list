@@ -51,6 +51,8 @@ function verify(result, request) {
       assert.equal(p.w, p.rotated ? source.h : source.w);
       assert.equal(p.h, p.rotated ? source.w : source.h);
       if (!source.rotate) assert.equal(p.rotated, false);
+      if (data.considerGrain && source.grain !== "none")
+        assert.equal(p.grain, s.grain);
       for (const v of [p.x, p.y, p.w, p.h]) assert.ok(Number.isSafeInteger(v));
       assert.ok(p.x >= data.trim && p.y >= data.trim);
       assert.ok(p.x + p.w <= sheet.w - data.trim);
@@ -209,17 +211,19 @@ test("randomized geometry invariants across 80 projects", () => {
         part(5 + rand(120), 5 + rand(120), 1 + rand(5), {
           id: `p${j}`,
           rotate: Boolean(rand(2)),
+          grain: ["length", "width", "none"][rand(3)],
           material: rand(3) ? "Plywood" : "MDF",
         }),
       ),
       [
         stock(150, 100, 1 + rand(6)),
-        stock(120, 180, "", { id: "s2", material: "MDF" }),
+        stock(120, 180, "", { id: "s2", material: "MDF", grain: "width" }),
       ],
       {
         kerf: rand(5) / 2,
         trim: rand(4),
         quality: i % 2 ? "balanced" : "thorough",
+        considerGrain: i % 3 === 0,
       },
     );
     verify(optimize(req), req);
@@ -239,4 +243,52 @@ test("rejects duplicate row IDs to prevent incorrect stock inventory tracking", 
 
 test("does not silently round JSON numeric inputs past supported precision", () => {
   assert.throws(() => optimize(input([part(1.0001, 10)])), /3 decimal/);
+});
+
+test("grain axes must match stock; cross-grain turns are rejected even if they fit", () => {
+  const req = input(
+    [part(80, 40, 1, { grain: "length" })],
+    [stock(40, 80, "", { grain: "length" })],
+    { considerGrain: true },
+  );
+  assert.equal(optimize(req).unplaced.length, 1);
+  const r = optimize({ ...req, considerGrain: false });
+  assert.equal(r.unplaced.length, 0);
+});
+test("grain across width permits only the turn that aligns it to stock length", () => {
+  const req = input(
+    [part(80, 40, 1, { grain: "width" })],
+    [stock(40, 80, "", { grain: "length" })],
+    { considerGrain: true },
+  );
+  const r = optimize(req);
+  verify(r, req);
+  assert.equal(r.unplaced.length, 0);
+  assert.equal(r.sheets[0].placements[0].rotated, true);
+  assert.equal(r.sheets[0].placements[0].grain, "length");
+  assert.equal(optimize({ ...req, rotation: false }).unplaced.length, 1);
+});
+test("grain-free parts can rotate; square parts can rotate grain axes too", () => {
+  let req = input([part(80, 40, 1, { grain: "none" })], [stock(40, 80)], {
+    considerGrain: true,
+  });
+  assert.equal(optimize(req).unplaced.length, 0);
+  req = input(
+    [part(40, 40, 1, { grain: "width" })],
+    [stock(40, 40, "", { grain: "length" })],
+    { considerGrain: true },
+  );
+  const r = optimize(req);
+  verify(r, req);
+  assert.equal(r.sheets[0].placements[0].rotated, true);
+});
+test("old projects default grain axes to length and keep consideration off", () => {
+  const data = normalize(input([part(20, 30)]));
+  assert.equal(data.considerGrain, false);
+  assert.equal(data.parts[0].grain, "length");
+  assert.equal(data.stocks[0].grain, "length");
+  assert.throws(
+    () => normalize(input([part(20, 30, 1, { grain: "diagonal" })])),
+    /Invalid grain/,
+  );
 });

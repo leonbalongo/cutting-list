@@ -1,8 +1,9 @@
 import "./style.css";
 import { normalize } from "./optimizer.js";
-import { partsFromCSV, csvCell } from "./csv.js";
+import { csvCell } from "./csv.js";
 import { isNative, shareNativeFile, printNativePlan } from "./native.js";
 import { chooseImportFile, readImportText } from "./import-file.js";
+import { readMeasurementFile } from "./workbook-reader.js";
 
 const icons = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -78,6 +79,7 @@ function example() {
     kerf: 3,
     trim: 10,
     rotation: true,
+    considerGrain: false,
     quality: "balanced",
     parts: [
       ["Side panel", 720, 560, 2],
@@ -118,7 +120,12 @@ function validProject(p) {
   );
 }
 const draft = read("cutcraft-draft-v1", null);
-let project = validProject(draft) ? draft : example();
+let project = {
+  rotation: true,
+  considerGrain: false,
+  quality: "balanced",
+  ...(validProject(draft) ? draft : example()),
+};
 let result = null,
   worker = null,
   busy = false,
@@ -128,6 +135,8 @@ let result = null,
   activeTab = "layout",
   lastError = "";
 let toastTimer;
+let pendingWorkbook = null,
+  importController = null;
 const app = document.querySelector("#app");
 function toast(message) {
   const el = document.querySelector("#toast");
@@ -157,6 +166,9 @@ function invalidate() {
 function input(row, group, key, label, type = "number", extra = "") {
   return `<input aria-label="${esc(label)}" data-group="${group}" data-id="${esc(row.id)}" data-key="${key}" type="${type}" value="${esc(row[key])}" ${type === "number" ? `min="${key === "qty" ? 1 : 0.001}" step="${key === "qty" ? 1 : 0.001}"` : ""} ${extra}>`;
 }
+function grainSelect(row, group) {
+  return `<select class="grain-select" aria-label="${esc(row.label)} grain direction" data-group="${group}" data-id="${esc(row.id)}" data-key="grain">${(group === "parts" ? ["length", "width", "none"] : ["length", "width"]).map((axis) => `<option value="${axis}" ${(row.grain || "length") === axis ? "selected" : ""}>${axis === "length" ? "↕ Length" : axis === "width" ? "↔ Width" : "Any / none"}</option>`).join("")}</select>`;
+}
 function partRows() {
   return (
     project.parts
@@ -165,11 +177,12 @@ function partRows() {
     <td><span class="part-dot" style="background:${palette[i % palette.length]}"></span>${input(p, "parts", "label", `Part ${i + 1} label`, "text")}</td>
     <td>${input(p, "parts", "width", `${p.label} width`)}</td><td>${input(p, "parts", "height", `${p.label} length`)}</td><td>${input(p, "parts", "qty", `${p.label} quantity`)}</td>
     <td><input class="material-input" aria-label="${esc(p.label)} material" data-group="parts" data-id="${esc(p.id)}" data-key="material" value="${esc(p.material)}" list="materials"></td>
-    <td class="center"><input type="checkbox" data-group="parts" data-id="${esc(p.id)}" data-key="rotate" aria-label="Allow rotation for ${esc(p.label)}" ${p.rotate ? "checked" : ""} title="Uncheck to preserve grain direction"></td>
+    ${project.considerGrain ? `<td>${grainSelect(p, "parts")}</td>` : ""}
+    <td class="center"><input type="checkbox" data-group="parts" data-id="${esc(p.id)}" data-key="rotate" aria-label="Allow rotation for ${esc(p.label)}" ${p.rotate !== false ? "checked" : ""} title="Uncheck to preserve grain direction"></td>
     <td><button class="icon-button delete" data-action="remove-part" data-id="${esc(p.id)}" aria-label="Delete ${esc(p.label)}">${icon("trash")}</button></td></tr>`,
       )
       .join("") ||
-    '<tr><td colspan="7" class="table-empty">Your next project starts with a part. Add one below.</td></tr>'
+    `<tr><td colspan="${project.considerGrain ? 8 : 7}" class="table-empty">Your next project starts with a part. Add one below.</td></tr>`
   );
 }
 function stockRows() {
@@ -177,10 +190,10 @@ function stockRows() {
     project.stocks
       .map(
         (s, i) =>
-          `<tr><td><span class="stock-symbol">${icon("layers")}</span>${input(s, "stocks", "label", `Stock ${i + 1} label`, "text")}</td><td>${input(s, "stocks", "width", `${s.label} width`)}</td><td>${input(s, "stocks", "height", `${s.label} length`)}</td><td>${input(s, "stocks", "qty", `${s.label} available quantity`, "number", 'placeholder="∞" title="Leave blank for unlimited sheets"')}</td><td>${input(s, "stocks", "material", `${s.label} material`, "text", 'list="materials"')}</td><td><button class="icon-button delete" data-action="remove-stock" data-id="${esc(s.id)}" aria-label="Delete ${esc(s.label)}">${icon("trash")}</button></td></tr>`,
+          `<tr><td><span class="stock-symbol">${icon("layers")}</span>${input(s, "stocks", "label", `Stock ${i + 1} label`, "text")}</td><td>${input(s, "stocks", "width", `${s.label} width`)}</td><td>${input(s, "stocks", "height", `${s.label} length`)}</td><td>${input(s, "stocks", "qty", `${s.label} available quantity`, "number", 'placeholder="∞" title="Leave blank for unlimited sheets"')}</td><td>${input(s, "stocks", "material", `${s.label} material`, "text", 'list="materials"')}</td>${project.considerGrain ? `<td>${grainSelect(s, "stocks")}</td>` : ""}<td><button class="icon-button delete" data-action="remove-stock" data-id="${esc(s.id)}" aria-label="Delete ${esc(s.label)}">${icon("trash")}</button></td></tr>`,
       )
       .join("") ||
-    '<tr><td colspan="6" class="table-empty">Add a stock sheet to get started.</td></tr>'
+    `<tr><td colspan="${project.considerGrain ? 7 : 6}" class="table-empty">Add a stock sheet to get started.</td></tr>`
   );
 }
 function render() {
@@ -194,13 +207,14 @@ function render() {
     <section class="project-bar"><div class="project-name-wrap"><span class="project-folder">${icon("folder")}</span><div><label class="sr-only" for="project-name">Project name</label><input id="project-name" value="${esc(project.name)}" maxlength="100" aria-label="Project name"><span id="save-state">${icon("check")} Saved on this device</span></div></div><div class="project-actions"><span class="unit-badge">Millimeters <b>mm</b></span><button class="button small secondary" data-action="save">${icon("save")} Save project</button></div></section>
     <section class="metrics" id="metrics"></section>
     <div class="workspace-grid"><section class="inputs-column" aria-label="Project inputs">
-      <div class="card parts-card"><div class="card-header"><div><h2>${icon("grid")} Parts to cut <span class="count-pill" id="part-count">${project.parts.length}</span></h2><p>The pieces that bring your project together.</p></div><button class="button text-button" data-action="import">${icon("upload")} Import CSV</button></div>
-      <div class="table-scroll"><table class="parts-table"><colgroup><col class="name-col"><col><col><col class="qty-col"><col class="material-col"><col class="rotate-col"><col class="action-col"></colgroup><thead><tr><th>PART NAME</th><th>WIDTH</th><th>LENGTH</th><th>QTY</th><th>MATERIAL</th><th title="Allow rotation" class="center">${icon("rotate")}</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>${partRows()}</tbody></table></div>
+      <div class="card parts-card"><div class="card-header"><div><h2>${icon("grid")} Parts to cut <span class="count-pill" id="part-count">${project.parts.length}</span></h2><p>The pieces that bring your project together.</p></div><button class="button text-button" data-action="import">${icon("upload")} Import spreadsheet</button></div>
+      <div class="table-scroll"><table class="parts-table ${project.considerGrain ? "with-grain" : ""}"><colgroup><col class="name-col"><col><col><col class="qty-col"><col class="material-col">${project.considerGrain ? `<col class="grain-col">` : ""}<col class="rotate-col"><col class="action-col"></colgroup><thead><tr><th>PART NAME</th><th>WIDTH</th><th>LENGTH</th><th>QTY</th><th>MATERIAL</th>${project.considerGrain ? `<th>GRAIN</th>` : ""}<th title="Allow rotation" class="center">${icon("rotate")}</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>${partRows()}</tbody></table></div>
       <div class="table-footer"><button class="button text-button" data-action="add-part">${icon("plus")} Add part</button><span>${icon("rotate")} Rotation allowed when checked</span></div></div>
       <div class="card stock-card"><div class="card-header"><div><h2>${icon("layers")} Stock sheets <span class="count-pill">${project.stocks.length}</span></h2><p>What you have to work with.</p></div><span class="mini-tag">Blank quantity = unlimited</span></div>
-      <div class="table-scroll"><table class="stock-table"><colgroup><col class="name-col"><col><col><col class="qty-col"><col class="material-col"><col class="action-col"></colgroup><thead><tr><th>SHEET NAME</th><th>WIDTH</th><th>LENGTH</th><th>QTY</th><th>MATERIAL</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>${stockRows()}</tbody></table></div><div class="table-footer"><button class="button text-button" data-action="add-stock">${icon("plus")} Add sheet</button><span>Match materials to your parts</span></div></div>
+      <div class="table-scroll"><table class="stock-table ${project.considerGrain ? "with-grain" : ""}"><colgroup><col class="name-col"><col><col><col class="qty-col"><col class="material-col">${project.considerGrain ? `<col class="grain-col">` : ""}<col class="action-col"></colgroup><thead><tr><th>SHEET NAME</th><th>WIDTH</th><th>LENGTH</th><th>QTY</th><th>MATERIAL</th>${project.considerGrain ? `<th>GRAIN</th>` : ""}<th><span class="sr-only">Actions</span></th></tr></thead><tbody>${stockRows()}</tbody></table></div><div class="table-footer"><button class="button text-button" data-action="add-stock">${icon("plus")} Add sheet</button><span>Match materials to your parts</span></div></div>
       <div class="card settings-card"><div class="card-header"><div><h2>${icon("sliders")} Cut settings</h2></div><button class="icon-button" data-action="settings-help" aria-label="Explain cut settings">${icon("info")}</button></div>
       <div class="settings-fields"><label>Saw kerf <span class="input-unit"><input id="kerf" type="number" min="0" step="0.001" value="${esc(project.kerf)}"><span>mm</span></span></label><label>Edge trim <span class="input-unit"><input id="trim" type="number" min="0" step="0.001" value="${esc(project.trim)}"><span>mm</span></span></label><label>Optimization<select id="quality"><option value="quick" ${project.quality === "quick" ? "selected" : ""}>Quick · 4 passes</option><option value="balanced" ${project.quality === "balanced" ? "selected" : ""}>Balanced · 12 passes</option><option value="thorough" ${project.quality === "thorough" ? "selected" : ""}>Thorough · 36 passes</option></select></label></div>
+      <div class="rotation-setting grain-setting"><div>${icon("leaf")} <span>Consider grain direction<small>Match each part’s grain axis to the stock. Set “none” for grain-free parts.</small></span></div><label class="switch"><input type="checkbox" id="considerGrain" ${project.considerGrain ? "checked" : ""} aria-label="Consider grain direction"><span></span></label></div>
       <div class="rotation-setting"><div>${icon("rotate")} <span>Allow part rotation<small>Turn parts 90° for a better fit</small></span></div><label class="switch"><input type="checkbox" id="rotation" ${project.rotation ? "checked" : ""} aria-label="Allow part rotation"><span></span></label></div></div>
       <button class="button primary optimize" data-action="optimize" id="optimize-button">${icon("grid")} Optimize cutting layout ${icon("arrow")}</button>
       <p class="privacy-note">${icon("shield")} Your project stays on your device. No uploads. No limits.</p>
@@ -209,6 +223,9 @@ function render() {
   </main><footer><span><b>cutcraft.</b> Make every sheet count.</span><span>No subscriptions. No accounts. Just better cuts.</span><button data-action="guide">Help & shortcuts ${icon("chevron")}</button></footer>
   <datalist id="materials">${[...new Set(["Plywood", "MDF", "Melamine", ...project.parts.map((p) => p.material), ...project.stocks.map((s) => s.material)])].map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
   <dialog id="dialog"></dialog>`;
+  document
+    .querySelector("#dialog")
+    .addEventListener("close", () => importController?.abort());
   renderMetrics();
   renderResults();
   updateOptimize();
@@ -281,6 +298,8 @@ function sheetSVG(sheet, index, standalone = false) {
     shapes += `<g ${!standalone ? `data-action="select-part" data-sheet="${index}" data-placement="${i}" tabindex="0" role="button" aria-label="${esc(title)}"` : ""}><title>${esc(title)}</title><rect x="${x}" y="${y}" width="${pw}" height="${ph}" fill="${color}" stroke="${isSelected ? "#145b4c" : "#ffffff"}" stroke-width="${isSelected ? 8 : Math.max(1.5, w * 0.0008)}"/>${tiny ? "" : `<text x="${x + pw / 2}" y="${y + ph / 2 - (large ? font * 0.35 : 0)}" fill="#33483f" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="${Math.min(font, (pw / Math.max(String(p.label).length, 6)) * 1.5)}" font-weight="600">${esc(p.label)}</text>${large ? `<text x="${x + pw / 2}" y="${y + ph / 2 + font * 1.1}" fill="#53675c" text-anchor="middle" font-family="Arial,sans-serif" font-size="${font * 0.78}">${fmt(pw)} × ${fmt(ph)}${p.rotated ? " ↻" : ""}</text>` : ""}`}</g>`;
   }
   shapes += `<text x="${w / 2}" y="${-margin * 0.34}" text-anchor="middle" fill="#7d867f" font-family="Arial,sans-serif" font-size="${font * 0.85}">${fmt(w)} mm</text><text x="${-margin * 0.45}" y="${h / 2}" text-anchor="middle" fill="#7d867f" font-family="Arial,sans-serif" font-size="${font * 0.85}" transform="rotate(-90 ${-margin * 0.45} ${h / 2})">${fmt(h)} mm</text>`;
+  if (result.considerGrain)
+    shapes += `<text x="${w / 2}" y="${h + margin * 0.7}" text-anchor="middle" fill="#145b4c" font-family="Arial,sans-serif" font-size="${font * 0.85}">${sheet.grain === "width" ? "↔" : "↕"} Grain along ${sheet.grain}</text>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-margin} ${-margin} ${w + margin * 2} ${h + margin * 2}" class="sheet-svg" role="img" aria-label="Cutting plan for sheet ${index + 1}" ${standalone ? `width="${w}" height="${h}"` : ""}>${shapes}</svg>`;
 }
 function renderResults() {
@@ -411,12 +430,36 @@ function cancel() {
   renderResults();
   toast("Optimization cancelled. Your cut list is unchanged.");
 }
+function showWorkbookPreview() {
+  modal(
+    "Preview spreadsheet import",
+    `<p class="modal-intro">Choose the worksheet to import. Review the preview, then replace the current parts list. All dimensions are millimeters.</p><label class="worksheet-label" for="import-sheet">Worksheet</label><select id="import-sheet">${pendingWorkbook.sheets.map((sheet, i) => `<option value="${i}" ${i === pendingWorkbook.selected ? "selected" : ""}>${esc(sheet.name)}${sheet.error ? " — needs attention" : ` — ${sheet.parts.length} rows`}</option>`).join("")}</select><div id="import-preview"></div><div class="modal-actions"><button class="button secondary" data-action="import">Choose another file</button><button class="button primary" data-action="apply-spreadsheet">Import parts</button></div>`,
+  );
+  renderImportPreview();
+}
+function renderImportPreview() {
+  const sheet = pendingWorkbook.sheets[pendingWorkbook.selected];
+  const target = document.querySelector("#import-preview");
+  document.querySelector('[data-action="apply-spreadsheet"]').disabled =
+    Boolean(sheet.error);
+  target.innerHTML = sheet.error
+    ? `<p class="warning" role="alert">${esc(sheet.error)}</p>`
+    : `<p class="import-counts"><strong>${sheet.parts.length} rows · ${sheet.quantity} pieces</strong> · ${sheet.skipped} disabled/note rows skipped</p><div class="table-scroll"><table class="import-preview-table"><thead><tr><th>PART</th><th>WIDTH</th><th>LENGTH</th><th>QTY</th><th>MATERIAL</th><th>GRAIN</th></tr></thead><tbody>${sheet.parts
+        .slice(0, 8)
+        .map(
+          (part) =>
+            `<tr><td>${esc(part.label)}</td><td>${esc(part.width)}</td><td>${esc(part.height)}</td><td>${esc(part.qty)}</td><td>${esc(part.material)}</td><td>${esc(part.grain)}</td></tr>`,
+        )
+        .join(
+          "",
+        )}</tbody></table></div><p>Showing the first ${Math.min(8, sheet.parts.length)} rows. All ${sheet.parts.length} rows will be imported. Grain values take effect when Consider grain direction is on. This replaces your current parts, not stock sheets or cut settings.</p>`;
+}
 function modal(title, content, wide = false) {
   const dialog = document.querySelector("#dialog");
-  if (dialog.open) dialog.close();
+  const alreadyOpen = dialog.open;
   dialog.className = wide ? "wide-dialog" : "";
   dialog.innerHTML = `<div class="modal-header"><h2>${esc(title)}</h2><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">${icon("close")}</button></div><div class="modal-content">${content}</div>`;
-  dialog.showModal();
+  if (!alreadyOpen) dialog.showModal();
 }
 async function download(name, content, type) {
   try {
@@ -491,19 +534,27 @@ app.addEventListener("input", (event) => {
     if (!row) return;
     row[el.dataset.key] = el.type === "checkbox" ? el.checked : el.value;
     invalidate();
-  } else if (["kerf", "trim", "quality", "rotation"].includes(el.id)) {
+  } else if (
+    ["kerf", "trim", "quality", "rotation", "considerGrain"].includes(el.id)
+  ) {
     project[el.id] = el.type === "checkbox" ? el.checked : el.value;
     invalidate();
+    if (el.id === "considerGrain") render();
   }
 });
 app.addEventListener("change", async (event) => {
+  if (event.target.id === "import-sheet") {
+    pendingWorkbook.selected = Number(event.target.value);
+    renderImportPreview();
+    return;
+  }
   if (event.target.id !== "file-input") return;
   const file = event.target.files[0];
   if (!file) return;
   const kind = event.target.dataset.importKind;
   try {
-    const text = await readImportText(file);
     if (kind === "json") {
+      const text = await readImportText(file);
       const incoming = JSON.parse(text);
       if (!validProject(incoming))
         throw new Error("This is not a Cutcraft project JSON file.");
@@ -516,25 +567,30 @@ app.addEventListener("change", async (event) => {
         return;
       project = incoming;
     } else {
-      const parts = partsFromCSV(text).map((p, i) => ({
-        ...p,
-        color: palette[i % palette.length],
-      }));
-      normalize({ ...project, parts });
-      if (
-        project.parts.length &&
-        !confirm(
-          `Replace the current part list with ${parts.length} imported rows?`,
-        )
-      )
-        return;
-      project.parts = parts;
+      importController?.abort();
+      const controller = new AbortController();
+      importController = controller;
+      toast("Reading spreadsheet on your device…");
+      try {
+        const workbook = await readMeasurementFile(file, controller.signal);
+        if (controller.signal.aborted) return;
+        pendingWorkbook = workbook;
+        pendingWorkbook.selected = Math.max(
+          0,
+          workbook.sheets.findIndex((sheet) => !sheet.error),
+        );
+      } finally {
+        if (importController === controller) importController = null;
+      }
+      showWorkbookPreview();
+      return;
     }
     document.querySelector("#dialog").close();
     invalidate();
     render();
     toast("Imported successfully");
   } catch (e) {
+    if (e.name === "AbortError") return;
     const dialog = document.querySelector("#dialog[open]");
     if (dialog) {
       let error = dialog.querySelector("#import-error");
@@ -703,27 +759,73 @@ app.addEventListener("click", async (event) => {
     case "import":
       modal(
         "Import your cut list",
-        `<p class="modal-intro">Import a CSV with these column names. Dimensions are in millimeters; quantity is a whole number.</p><pre>label,width,length,quantity,material,rotate\nSide panel,720,560,2,Plywood,true\nShelf,864,540,3,Plywood,false</pre><p>Material and rotate are optional. Set rotate to false for grain-sensitive parts. Import replaces the current parts list.</p><p>The picker shows all files so CSVs are selectable on Android. Choose a plain-text CSV, not an Excel workbook renamed to .csv.</p><div class="modal-actions"><button class="button secondary" data-action="csv-template">${icon("download")} Download template</button><button class="button primary" data-action="choose-csv">${icon("upload")} Choose CSV</button></div>`,
+        `<p class="modal-intro">Choose Excel (XLSX, XLS, XLSM, XLSB), OpenDocument (ODS), CSV or TSV. Files stay on this device. You can choose a worksheet and preview measurements before replacing your list.</p><pre>Label,Width,Length,Quantity,Material,Rotate,Grain\nSide panel,560,720,2,Plywood,true,length\nShelf,540,864,3,Plywood,true,none</pre><p>Width, Length (or Height) and Quantity (or Qty/Count) are required. Names are optional. Dimensions are in millimeters. Disabled rows are skipped. Macros are not executed; formula cells need saved calculated values.</p><div class="modal-actions"><button class="button secondary" data-action="csv-template">${icon("download")} Download template</button><button class="button primary" data-action="choose-csv">${icon("upload")} Choose spreadsheet</button></div>`,
       );
       break;
     case "choose-csv":
     case "import-json": {
-      chooseImportFile(action === "choose-csv" ? "csv" : "json");
+      importController?.abort();
+      chooseImportFile(action === "choose-csv" ? "spreadsheet" : "json");
       break;
     }
     case "csv-template":
       download(
         "cutcraft-template.csv",
-        "label,width,length,quantity,material,rotate\nSide panel,720,560,2,Plywood,true\nShelf,864,540,3,Plywood,false\n",
+        "label,width,length,quantity,material,rotate,grain\nSide panel,560,720,2,Plywood,true,length\nShelf,540,864,3,Plywood,true,none\n",
         "text/csv",
       );
       break;
     case "export":
       modal(
         "Take your plan to the workshop",
-        `<p class="modal-intro">Export your project anytime. No account or subscription needed.</p><div class="export-options"><button data-action="export-json">${icon("folder")}<span><strong>Project backup</strong><small>JSON · editable in Cutcraft, including inputs</small></span>${icon("download")}</button><button data-action="export-csv">${icon("grid")}<span><strong>Parts list</strong><small>CSV · your requested parts and quantities</small></span>${icon("download")}</button>${result?.sheets.length ? `<button data-action="export-svg">${icon("layers")}<span><strong>Current sheet diagram</strong><small>SVG · scalable layout for sheet ${selectedSheet + 1}</small></span>${icon("download")}</button><button data-action="export-layout">${icon("grid")}<span><strong>Placement coordinates</strong><small>CSV · all sheets, dimensions, positions and rotation</small></span>${icon("download")}</button><button data-action="print">${icon("print")}<span><strong>Print / save as PDF</strong><small>Every sheet, with its placement list</small></span>${icon("chevron")}</button>` : "<p>Optimize a layout to unlock diagram and placement exports.</p>"}</div>`,
+        `<p class="modal-intro">Export your project anytime. No account or subscription needed.</p><div class="export-options"><button data-action="export-json">${icon("folder")}<span><strong>Project backup</strong><small>JSON · editable in Cutcraft, including inputs</small></span>${icon("download")}</button><button data-action="export-csv">${icon("grid")}<span><strong>Parts list</strong><small>CSV · your requested parts and quantities</small></span>${icon("download")}</button>${result ? `<button data-action="export-pdf">${icon("download")}<span><strong>Complete PDF report</strong><small>All sheet diagrams, project totals, sheet statistics and part quantities</small></span>${icon("download")}</button>` : ""}${result?.sheets.length ? `<button data-action="export-svg">${icon("layers")}<span><strong>Current sheet diagram</strong><small>SVG · scalable layout for sheet ${selectedSheet + 1}</small></span>${icon("download")}</button><button data-action="export-layout">${icon("grid")}<span><strong>Placement coordinates</strong><small>CSV · all sheets, dimensions, positions and rotation</small></span>${icon("download")}</button><button data-action="print">${icon("print")}<span><strong>Print / save as PDF</strong><small>Every sheet, with its placement list</small></span>${icon("chevron")}</button>` : "<p>Optimize a layout to unlock diagram and placement exports.</p>"}</div>`,
       );
       break;
+    case "apply-spreadsheet": {
+      const sheet = pendingWorkbook?.sheets[pendingWorkbook.selected];
+      if (!sheet || sheet.error) break;
+      if (
+        project.parts.length &&
+        !confirm(
+          `Replace the current part list with ${sheet.parts.length} imported rows?`,
+        )
+      )
+        break;
+      project.parts = sheet.parts.map((part, i) => ({
+        ...part,
+        color: palette[i % palette.length],
+      }));
+      pendingWorkbook = null;
+      document.querySelector("#dialog").close();
+      invalidate();
+      render();
+      toast("Spreadsheet imported successfully");
+      break;
+    }
+    case "export-pdf": {
+      if (!result) break;
+      const original = btn.innerHTML;
+      btn.disabled = true;
+      btn.textContent = "Preparing complete PDF report…";
+      try {
+        const { createPlanPDF, loadReportFont } =
+          await import("./pdf-report.js");
+        const report = createPlanPDF(project, result, await loadReportFont());
+        await download(
+          `${filename()}-cutting-report.pdf`,
+          new Uint8Array(report.output("arraybuffer")),
+          "application/pdf",
+        );
+      } catch (error) {
+        toast(`PDF export failed: ${error.message}`);
+      } finally {
+        if (btn.isConnected) {
+          btn.disabled = false;
+          btn.innerHTML = original;
+        }
+      }
+      break;
+    }
     case "export-json":
       download(
         `${filename()}.json`,
@@ -735,9 +837,17 @@ app.addEventListener("click", async (event) => {
       download(
         `${filename()}-parts.csv`,
         [
-          "label,width,length,quantity,material,rotate",
+          "label,width,length,quantity,material,rotate,grain",
           ...project.parts.map((p) =>
-            [p.label, p.width, p.height, p.qty, p.material, p.rotate]
+            [
+              p.label,
+              p.width,
+              p.height,
+              p.qty,
+              p.material,
+              p.rotate,
+              p.grain || "length",
+            ]
               .map(csvCell)
               .join(","),
           ),
@@ -805,7 +915,7 @@ app.addEventListener("click", async (event) => {
         action === "guide"
           ? "A little planning goes a long way"
           : "Fine-tune your cuts",
-        `<div class="guide"><div><span>01</span><section><h3>Add your parts & stock</h3><p>Enter width, length, and quantity in millimeters (up to 3 decimal places). Materials must match exactly. A blank stock quantity means an unlimited supply.</p></section></div><div><span>02</span><section><h3>Account for the real world</h3><p><b>Saw kerf</b> is the material your blade removes between parts. <b>Edge trim</b> is removed from all four stock edges. Uncheck a part’s rotation box to keep its width/length grain orientation; turn off global rotation to lock every part.</p></section></div><div><span>03</span><section><h3>Find your fit</h3><p>Optimization runs in a background worker. Quick, Balanced and Thorough compare 4, 12 and 36 guillotine arrangements. These are heuristics, not a guarantee of the mathematically best result. Check every dimension before cutting.</p></section></div><div><span>04</span><section><h3>Keep it yours</h3><p>No account, billing, cloud upload or imposed part quota. Projects live in this browser; clearing browser data removes them. Export JSON for backups. Device memory and speed are the practical limits. Press <kbd>Ctrl / ⌘ S</kbd> to save or <kbd>Ctrl / ⌘ Enter</kbd> to optimize.</p></section></div></div>`,
+        `<div class="guide"><div><span>01</span><section><h3>Add your parts & stock</h3><p>Enter width, length, and quantity in millimeters (up to 3 decimal places). Materials must match exactly. A blank stock quantity means an unlimited supply.</p></section></div><div><span>02</span><section><h3>Account for the real world</h3><p><b>Saw kerf</b> is the material your blade removes between parts. <b>Edge trim</b> is removed from all four stock edges. Enable <b>Consider grain direction</b> to show grain selectors on parts and stock. Length means along the entered length, not necessarily the longer edge. Set parts to none when grain is irrelevant. Rotation is only allowed if it respects both the rotation lock and the stock’s grain direction.</p></section></div><div><span>03</span><section><h3>Find your fit</h3><p>Optimization runs in a background worker. Quick, Balanced and Thorough compare 4, 12 and 36 guillotine arrangements. These are heuristics, not a guarantee of the mathematically best result. Check every dimension before cutting.</p></section></div><div><span>04</span><section><h3>Keep it yours</h3><p>No account, billing, cloud upload or imposed part quota. Projects live in this browser; clearing browser data removes them. Export JSON for backups. Device memory and speed are the practical limits. Press <kbd>Ctrl / ⌘ S</kbd> to save or <kbd>Ctrl / ⌘ Enter</kbd> to optimize.</p></section></div></div>`,
       );
       break;
   }

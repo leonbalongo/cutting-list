@@ -16,11 +16,27 @@ export async function shareNativeFile(
   if (!name || /[/\\]/.test(name) || name === "." || name === "..") {
     throw new Error("Invalid export filename.");
   }
+  const binary = content instanceof ArrayBuffer || ArrayBuffer.isView(content);
+  let data = content;
+  if (binary) {
+    const bytes =
+      content instanceof ArrayBuffer
+        ? new Uint8Array(content)
+        : new Uint8Array(
+            content.buffer,
+            content.byteOffset,
+            content.byteLength,
+          );
+    let text = "";
+    for (let i = 0; i < bytes.length; i += 32768)
+      text += String.fromCharCode(...bytes.subarray(i, i + 32768));
+    data = btoa(text);
+  }
   const { uri } = await services.Filesystem.writeFile({
     path: `exports/${name}`,
-    data: content,
+    data,
     directory: Directory.Cache,
-    encoding: Encoding.UTF8,
+    ...(binary ? {} : { encoding: Encoding.UTF8 }),
     recursive: true,
   });
   await services.Share.share({

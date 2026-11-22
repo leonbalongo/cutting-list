@@ -2,7 +2,8 @@
 // INSIDE the active dialog, and click it synchronously in the user's gesture.
 // A fresh input also permits retrying the same file after cancelling/failing.
 export function chooseImportFile(kind) {
-  if (!["csv", "json"].includes(kind)) throw new Error("Unknown import type.");
+  if (!["csv", "spreadsheet", "json"].includes(kind))
+    throw new Error("Unknown import type.");
   document.querySelector("#file-input")?.remove();
   document.querySelector("#import-error")?.remove();
   const input = document.createElement("input");
@@ -13,7 +14,7 @@ export function chooseImportFile(kind) {
   input.dataset.importKind = kind;
   input.setAttribute(
     "aria-label",
-    kind === "csv" ? "Import CSV file" : "Import project JSON file",
+    kind === "json" ? "Import project JSON file" : "Import spreadsheet file",
   );
   // Android providers may label a valid CSV as text/plain, application/csv,
   // application/octet-stream, or even application/vnd.ms-excel. Let users
