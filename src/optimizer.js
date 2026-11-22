@@ -1,3 +1,4 @@
+import { grainAxis, grainMatches, placedGrain } from "./grain.js";
 // Independent guillotine nesting heuristic. All geometry uses integer thousandths
 // of a millimetre; rounding happens at the input boundary, never during packing.
 export const SCALE = 1000;
@@ -45,11 +46,13 @@ export function normalize(input) {
     h: dimension(p.height, `Part ${i + 1} length`),
     qty: quantity(p.qty, `Part ${i + 1} quantity`),
     rotate: p.rotate !== false && input.rotation !== false,
+    grain: grainAxis(p.grain),
   }));
   const stocks = input.stocks.map((s, i) => ({
     ...s,
     id: s.id || `stock-${i}`,
     material: (s.material || "Plywood").trim(),
+    grain: grainAxis(s.grain, false),
     w: dimension(s.width, `Stock ${i + 1} width`),
     h: dimension(s.height, `Stock ${i + 1} length`),
     qty:
@@ -65,11 +68,17 @@ export function normalize(input) {
   for (const s of stocks)
     if (s.w <= trim * 2 || s.h <= trim * 2)
       throw new Error("Edge trim leaves no usable area on a stock sheet.");
-  return { parts, stocks, kerf, trim };
+  return {
+    parts,
+    stocks,
+    kerf,
+    trim,
+    considerGrain: input.considerGrain === true,
+  };
 }
 
-function variants(part) {
-  return part.rotate && part.w !== part.h
+function variants(part, sheet) {
+  return part.rotate && (part.w !== part.h || sheet.considerGrain)
     ? [
         [part.w, part.h, false],
         [part.h, part.w, true],
@@ -82,8 +91,13 @@ function findPosition(sheet, part, strategy) {
   let best = null;
   for (let i = 0; i < sheet.free.length; i++) {
     const r = sheet.free[i];
-    for (const [w, h, rotated] of variants(part)) {
+    for (const [w, h, rotated] of variants(part, sheet)) {
       if (w > r.w || h > r.h) continue;
+      if (
+        sheet.considerGrain &&
+        !grainMatches(part.grain, sheet.grain, rotated)
+      )
+        continue;
       const dw = r.w - w,
         dh = r.h - h;
       const score =
@@ -127,6 +141,7 @@ function place(sheet, part, pos, kerf, split) {
     w: pos.w,
     h: pos.h,
     rotated: pos.rotated,
+    grain: placedGrain(part.grain, pos.rotated),
   });
 }
 
@@ -160,6 +175,8 @@ function attempt(data, order, strategy, split) {
         const sheet = {
           stockId: stock.id,
           material: stock.material,
+          grain: stock.grain,
+          considerGrain: data.considerGrain,
           label: stock.label,
           w: stock.w,
           h: stock.h,
@@ -208,6 +225,7 @@ function attempt(data, order, strategy, split) {
     kerf: data.kerf,
     trim: data.trim,
     scale: SCALE,
+    considerGrain: data.considerGrain,
   };
 }
 

@@ -1,4 +1,7 @@
 import { test, expect } from "@playwright/test";
+import { utils, write } from "@e965/xlsx";
+import { PDFDocument } from "pdf-lib";
+import { readFile } from "node:fs/promises";
 
 test("loads and optimizes the demo without browser errors", async ({
   page,
@@ -79,9 +82,11 @@ test("imports a CSV and reports parts that cannot fit", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
   page.on("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Import CSV" }).click();
+  await page.getByRole("button", { name: "Import spreadsheet" }).click();
   const pickerOpened = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Choose spreadsheet", exact: true })
+    .click();
   const picker = await pickerOpened;
   expect(
     await picker
@@ -96,6 +101,7 @@ test("imports a CSV and reports parts that cannot fit", async ({ page }) => {
       "label,width,length,quantity,material,rotate\nLarge panel,9999,9999,1,Plywood,false\nSmall shelf,100,200,2,Plywood,true",
     ),
   });
+  await page.getByRole("button", { name: "Import parts", exact: true }).click();
   await expect(page.locator(".part-row")).toHaveCount(2);
   await page.locator("#optimize-button").click();
   await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
@@ -153,9 +159,13 @@ test("mobile picker accepts CSV with a generic provider MIME type and no extensi
   await page.goto("/");
   await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
   page.on("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Import CSV", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Import spreadsheet", exact: true })
+    .click();
   const opened = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Choose spreadsheet", exact: true })
+    .click();
   const chooser = await opened;
   expect(chooser.isMultiple()).toBe(false);
   await chooser.setFiles({
@@ -165,6 +175,7 @@ test("mobile picker accepts CSV with a generic provider MIME type and no extensi
       "label,width,length,quantity\nProvider shelf,100,200,2",
     ),
   });
+  await page.getByRole("button", { name: "Import parts", exact: true }).click();
   await expect(page.getByLabel("Part 1 label")).toHaveValue("Provider shelf");
   await expect(page.locator(".part-row")).toHaveCount(1);
 });
@@ -174,9 +185,13 @@ test("cancel and failed imports retain the cut list and allow picking the same f
 }) => {
   await page.goto("/");
   await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Import CSV", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Import spreadsheet", exact: true })
+    .click();
   let opened = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Choose spreadsheet", exact: true })
+    .click();
   await (await opened).setFiles([]);
   await expect(page.locator(".part-row")).toHaveCount(5);
   const file = {
@@ -186,18 +201,24 @@ test("cancel and failed imports retain the cut list and allow picking the same f
   };
   for (let i = 0; i < 2; i++) {
     opened = page.waitForEvent("filechooser");
-    await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Choose spreadsheet", exact: true })
+      .click();
     await (await opened).setFiles(file);
     await expect(page.getByRole("alert")).toContainText(
-      "changing the filename to .csv does not convert it",
+      "Cannot read this spreadsheet",
     );
     await expect(page.locator(".part-row")).toHaveCount(5);
     await expect(page.getByLabel("Side panel width")).toHaveValue("720");
   }
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
-  await page.getByRole("button", { name: "Import CSV", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Import spreadsheet", exact: true })
+    .click();
   opened = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Choose CSV", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Choose spreadsheet", exact: true })
+    .click();
   expect(
     await (
       await opened
@@ -235,4 +256,148 @@ test("project JSON picker opens inside My projects and uses the selected import 
     "Restored Android project",
   );
   await expect(page.locator(".part-row")).toHaveCount(5);
+});
+
+test("grain consideration exposes part/stock axes and persists them", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  await page
+    .getByRole("checkbox", { name: "Consider grain direction", exact: true })
+    .check();
+  await page
+    .getByLabel("Side panel grain direction", { exact: true })
+    .selectOption("width");
+  await page
+    .getByLabel("Adjustable shelf grain direction", { exact: true })
+    .selectOption("none");
+  await page
+    .getByLabel("Standard sheet grain direction", { exact: true })
+    .selectOption("length");
+  await page.reload();
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("checkbox", {
+      name: "Consider grain direction",
+      exact: true,
+    }),
+  ).toBeChecked();
+  await expect(
+    page.getByLabel("Side panel grain direction", { exact: true }),
+  ).toHaveValue("width");
+  await expect(
+    page.getByLabel("Adjustable shelf grain direction", { exact: true }),
+  ).toHaveValue("none");
+  await expect(page.locator(".sheet-svg")).toContainText("Grain along length");
+});
+
+test("Excel import previews worksheets and only applies the selected measurement sheet", async ({
+  page,
+}) => {
+  const book = utils.book_new();
+  utils.book_append_sheet(
+    book,
+    utils.aoa_to_sheet([["Notes"], ["Not measurement data"]]),
+    "Notes",
+  );
+  utils.book_append_sheet(
+    book,
+    utils.aoa_to_sheet([
+      ["Length", "Width", "Qty", "Enabled"],
+      [720, 560, 2, 1],
+      [864, 540, 3, 1],
+      [10, 10, 99, 0],
+    ]),
+    "Cabinet",
+  );
+  await page.goto("/");
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  page.on("dialog", (d) => d.accept());
+  await page
+    .getByRole("button", { name: "Import spreadsheet", exact: true })
+    .click();
+  const opened = page.waitForEvent("filechooser");
+  await page
+    .getByRole("button", { name: "Choose spreadsheet", exact: true })
+    .click();
+  await (
+    await opened
+  ).setFiles({
+    name: "measurements.xlsx",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from(write(book, { type: "array", bookType: "xlsx" })),
+  });
+  await expect(page.locator("#import-preview")).toContainText(
+    "2 rows · 5 pieces",
+  );
+  await expect(page.locator(".part-row")).toHaveCount(5);
+  await page.getByLabel("Worksheet", { exact: true }).selectOption("0");
+  await expect(
+    page.getByRole("button", { name: "Import parts", exact: true }),
+  ).toBeDisabled();
+  await page.getByLabel("Worksheet", { exact: true }).selectOption("1");
+  await page.getByRole("button", { name: "Import parts", exact: true }).click();
+  await expect(page.locator(".part-row")).toHaveCount(2);
+  await expect(page.getByLabel("Part 001 width", { exact: true })).toHaveValue(
+    "560",
+  );
+  await expect(page.getByLabel("Part 001 length", { exact: true })).toHaveValue(
+    "720",
+  );
+});
+
+test("complete PDF download includes every sheet and statistics", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  const count = await page.locator(".sheet-tab").count();
+  await page.getByRole("button", { name: "Export plan" }).click();
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", { name: /Complete PDF report/ }).click();
+  const download = await pending;
+  expect(download.suggestedFilename()).toContain("-cutting-report.pdf");
+  const pdf = await PDFDocument.load(await readFile(await download.path()));
+  expect(pdf.getPageCount()).toBe(count + 2);
+  expect(pdf.getSubject()).toContain("statistics");
+});
+
+test("spreadsheet import and complete PDF export work without a network connection", async ({
+  page,
+  context,
+}) => {
+  test.skip(!process.env.TEST_PRODUCTION, "Requires production offline cache.");
+  await page.goto("/");
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  await page.evaluate(() => navigator.serviceWorker.ready.then(() => true));
+  await page.reload();
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  page.on("dialog", (d) => d.accept());
+  await page
+    .getByRole("button", { name: "Import spreadsheet", exact: true })
+    .click();
+  const opened = page.waitForEvent("filechooser");
+  await page
+    .getByRole("button", { name: "Choose spreadsheet", exact: true })
+    .click();
+  await (
+    await opened
+  ).setFiles({
+    name: "offline.tsv",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Length\tWidth\tQty\n600\t400\t2"),
+  });
+  await page.getByRole("button", { name: "Import parts", exact: true }).click();
+  await page.locator("#optimize-button").click();
+  await expect(page.getByText("Layout ready", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Export plan" }).click();
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", { name: /Complete PDF report/ }).click();
+  const file = await pending;
+  const pdf = await PDFDocument.load(await readFile(await file.path()));
+  expect(pdf.getPageCount()).toBe(3);
 });

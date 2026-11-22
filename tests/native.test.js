@@ -82,3 +82,19 @@ test("Android uses bundled assets, a unique package and restricted export access
     /BILLING|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE/,
   );
 });
+
+test("native PDF exports are binary base64, not UTF-8 text", async () => {
+  const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0xff, 0x00]);
+  let written;
+  await shareNativeFile("report.pdf", bytes, {
+    Filesystem: {
+      async writeFile(options) {
+        written = options;
+        return { uri: "file:///cache/exports/report.pdf" };
+      },
+    },
+    Share: { async share() {} },
+  });
+  assert.equal(written.encoding, undefined);
+  assert.deepEqual(new Uint8Array(Buffer.from(written.data, "base64")), bytes);
+});
