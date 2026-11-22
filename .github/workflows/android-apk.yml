@@ -45,23 +45,28 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
-      - uses: android-actions/setup-android@v3
+      # GitHub's Ubuntu image already provides the Android command-line tools.
+      # Avoid downloading/replacing them with a third-party setup action.
       - uses: gradle/actions/setup-gradle@v4
-      - name: Install Android SDK
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Android SDK if needed
+        run: |
+          if [[ -d "$ANDROID_HOME/platforms/android-36" && -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ]]; then
+            echo "Required Android SDK is already installed."
+          else
+            bash scripts/ci-android.sh "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+          fi
       - run: npm ci
       - run: npm test
       - name: Bundle local web assets and native plugins
         run: npm run android:sync
       - name: Compile and lint Android application
-        working-directory: android
         run: |
-          chmod +x gradlew
-          ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+          chmod +x android/gradlew
+          bash scripts/ci-android.sh android/gradlew -p android --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
       - name: Prepare and verify APK
         run: |
           mkdir -p apk-download
